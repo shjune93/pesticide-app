@@ -1,36 +1,46 @@
 import React, { useEffect, useState, useRef, useMemo } from "react";
 
+// 한글 포함 검색 헬퍼
 function hangulIncludes(word, input) {
   return word.includes(input);
 }
 
 export default function App() {
+  // 상태: 작물 관련
   const [cropOptions, setCropOptions] = useState([]);
   const [selectedCrop, setSelectedCrop] = useState("");
   const [filteredCropOptions, setFilteredCropOptions] = useState([]);
   const [showCropSuggestions, setShowCropSuggestions] = useState(false);
 
+  // 상태: 병해충 관련
   const [diseases, setDiseases] = useState([]);
   const [selectedDiseases, setSelectedDiseases] = useState([]);
   const [diseaseSearch, setDiseaseSearch] = useState("");
 
+  // 상태: 기작(제외기작)
   const [mechanismOptions, setMechanismOptions] = useState([]);
   const [excludedMechanisms, setExcludedMechanisms] = useState([]);
   const [mechanismSearch, setMechanismSearch] = useState("");
   const [showMechanismSuggestions, setShowMechanismSuggestions] = useState(false);
 
+  // 상태: 보유 농약
   const [productOptions, setProductOptions] = useState([]);
   const [ownedProducts, setOwnedProducts] = useState([]);
   const [productSearch, setProductSearch] = useState("");
 
+  // 추천 결과
   const [recommendations, setRecommendations] = useState([]);
 
-  // ← 수정된 부분: 상세 필터용 상태 추가
+  // 상세 필터 상태
   const [selectedRecTypes, setSelectedRecTypes] = useState([]);
   const [selectedRecMechanisms, setSelectedRecMechanisms] = useState([]);
 
+  // 로딩 상태
+  const [isLoading, setIsLoading] = useState(false);
+
   const cropInputRef = useRef(null);
 
+  // 작물, 기작, 농약 목록 fetch
   useEffect(() => {
     fetch("http://localhost:8000/crops")
       .then(res => res.json())
@@ -50,6 +60,7 @@ export default function App() {
       .then(data => setProductOptions(data.products || []));
   }, []);
 
+  // 작물 선택시 병해충 fetch
   useEffect(() => {
     if (selectedCrop) {
       fetch(`http://localhost:8000/pests?crop=${encodeURIComponent(selectedCrop)}`)
@@ -58,6 +69,7 @@ export default function App() {
     }
   }, [selectedCrop]);
 
+  // 작물 입력
   const handleCropInput = e => {
     const value = e.target.value;
     setSelectedCrop(value);
@@ -67,12 +79,14 @@ export default function App() {
     setShowCropSuggestions(true);
   };
 
+  // 작물 선택
   const handleCropSelect = crop => {
     setSelectedCrop(crop);
     setShowCropSuggestions(false);
     setSelectedDiseases([]);
   };
 
+  // 병해충 선택/해제
   const handleDiseaseToggle = disease => {
     setSelectedDiseases(prev =>
       prev.includes(disease)
@@ -81,6 +95,7 @@ export default function App() {
     );
   };
 
+  // 기작(제외) 토글
   const toggleExcludedMechanism = mech => {
     setExcludedMechanisms(prev =>
       prev.includes(mech)
@@ -89,6 +104,7 @@ export default function App() {
     );
   };
 
+  // 보유 농약 토글
   const toggleOwnedProduct = product => {
     setOwnedProducts(prev =>
       prev.includes(product)
@@ -97,24 +113,31 @@ export default function App() {
     );
   };
 
+  // 추천 API 호출
   const handleRecommend = async () => {
-    setRecommendations([]); // 이전 추천 초기화
-    setSelectedRecTypes([]); // ← 수정된 부분: 상세 필터 초기화
-    setSelectedRecMechanisms([]); // ← 수정된 부분
-    const res = await fetch("http://localhost:8000/recommend", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        crop: selectedCrop,
-        pests_or_diseases: selectedDiseases,
-        used_mechanisms: excludedMechanisms,
-        owned_products: ownedProducts,
-      }),
-    });
-    const data = await res.json();
-    setRecommendations(data.recommendations || []);
+    setIsLoading(true);
+    setRecommendations([]);
+    setSelectedRecTypes([]);
+    setSelectedRecMechanisms([]);
+    try {
+      const res = await fetch("http://localhost:8000/recommend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          crop: selectedCrop,
+          pests_or_diseases: selectedDiseases,
+          used_mechanisms: excludedMechanisms,
+          owned_products: ownedProducts,
+        }),
+      });
+      const data = await res.json();
+      setRecommendations(data.recommendations || []);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
+  // 필터링
   const filteredDiseases = diseases.filter(d =>
     d.toLowerCase().includes(diseaseSearch.toLowerCase())
   );
@@ -125,24 +148,28 @@ export default function App() {
     p.toLowerCase().includes(productSearch.toLowerCase())
   );
 
-  // ← 수정된 부분: 필터 조건 적용된 추천 목록 계산
+  // 상세 필터: 제형/기작 필터
   const displayedRecs = useMemo(() => {
-    return recommendations.filter(pair =>
-      pair.every(item =>
-        (selectedRecTypes.length === 0 || selectedRecTypes.includes(item.type)) &&
-        (selectedRecMechanisms.length === 0 || selectedRecMechanisms.includes(item.mechanism))
-      )
-    );
+    return recommendations.filter(pair => {
+      // 제형 필터(AND): 모든 아이템이 type 조건 만족
+      const typeOk = pair.every(item =>
+        selectedRecTypes.length === 0 || selectedRecTypes.includes(item.type)
+      );
+      // 기작 필터(AND): pair의 모든 기작에 대해 체크된 기작 모두 포함
+      const allPairMechs = pair.map(item => item.mechanism);
+      const mechOk =
+        selectedRecMechanisms.length === 0 ||
+        selectedRecMechanisms.every(mech => allPairMechs.includes(mech));
+      return typeOk && mechOk;
+    });
   }, [recommendations, selectedRecTypes, selectedRecMechanisms]);
 
-  // ← 수정된 부분: UI용 필터 옵션 생성
   const recTypes = Array.from(new Set(recommendations.flat().map(item => item.type)));
   const recMechs = Array.from(new Set(recommendations.flat().map(item => item.mechanism)));
 
   return (
     <div style={{ padding: "2rem", fontFamily: "sans-serif" }}>
       <h1 style={{ fontSize: "24px", marginBottom: "1rem" }}>농약 추천 시스템</h1>
-
       {/* 작물 입력 부 */}
       <div style={{ position: "relative", width: "300px" }}>
         <label>작물 선택:</label>
@@ -175,7 +202,7 @@ export default function App() {
         )}
       </div>
 
-      {/* 질병/해충 입력부 */}
+      {/* 병해충 입력 부 */}
       {diseases.length > 0 && (
         <div style={{ marginTop: "2rem" }}>
           <label>병/충 검색:</label>
@@ -204,7 +231,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 작용기작 입력부 */}
+      {/* 작용기작 입력 부 */}
       {mechanismOptions.length > 0 && (
         <div style={{ marginTop: "2rem" }}>
           <label>작용기작 검색:</label>
@@ -242,7 +269,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 보유 농약 입력부 */}
+      {/* 보유 농약 입력 부 */}
       {productOptions.length > 0 && (
         <div style={{ marginTop: "2rem" }}>
           <label>보유 농약 검색:</label>
@@ -278,7 +305,10 @@ export default function App() {
         추천받기
       </button>
 
-      {/* ← 수정된 부분: 상세 필터 UI */}
+      {/* 추천 중 로딩 표시 */}
+      {isLoading && <p style={{ marginTop: "1rem", fontStyle: "italic" }}>추천받는 중...</p>}
+
+      {/* 상세 필터 UI */}
       {recommendations.length > 0 && (
         <div style={{
           marginTop: "2rem", border: "1px solid #ccc",
@@ -327,29 +357,34 @@ export default function App() {
       )}
 
       {/* 결과 출력 */}
-      {displayedRecs.length > 0 ? (
-        <div style={{ marginTop: "2rem" }}>
-          <h2>추천 농약 조합</h2>
-          {displayedRecs.map((pair, idx) => (
-            <div key={idx} style={{
-              border: "1px solid #ccc", padding: "1rem",
-              marginBottom: "1rem", borderRadius: "4px"
-            }}>
-              <h3>조합 {idx + 1}</h3>
-              {pair.map((r, i) => (
-                <div key={i} style={{ marginBottom: "1rem" }}>
-                  <div><strong>상표명:</strong> {r.product}</div>
-                  <div><strong>기작번호:</strong> {r.mechanism}</div>
-                  <div><strong>성분:</strong> {r.ingredient}</div>
-                  <div><strong>제형:</strong> {r.type}</div>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      ) : (
-        recommendations.length > 0 && (
-          <p style={{ marginTop: "1rem" }}>조건에 맞는 추천이 없습니다.</p>
+      {isLoading ? null : (
+        displayedRecs.length > 0 ? (
+          <div style={{ marginTop: "2rem" }}>
+            <h2>추천 농약 조합</h2>
+            {displayedRecs.map((pair, idx) => (
+              <div key={idx} style={{
+                border: "1px solid #ccc", padding: "1rem",
+                marginBottom: "1rem", borderRadius: "4px"
+              }}>
+                <h3>조합 {idx + 1}</h3>
+                {pair.map((r, i) => (
+                  <div key={i} style={{ marginBottom: "1rem" }}>
+                    <div><strong>상표명:</strong> {r.product}</div>
+                    <div><strong>기작번호:</strong> {r.mechanism}</div>
+                    <div><strong>기작명:</strong> {r.mechanism_name}</div>
+                    <div><strong>작용부위:</strong> {r.site_of_action}</div>
+                    <div><strong>작용원리:</strong> {r.mode_of_action}</div>
+                    <div><strong>제형:</strong> {r.type}</div>
+                    <div><strong>적용 병해충:</strong> {(r.pests||[]).join(", ")}</div>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        ) : (
+          recommendations.length === 0 && (
+            <p style={{ marginTop: "1rem" }}>조건에 맞는 추천이 없습니다.</p>
+          )
         )
       )}
     </div>
